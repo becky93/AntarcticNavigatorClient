@@ -4,12 +4,11 @@ import datetime
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from mailutil import getemailpsw
 
 def send(receiver, subject):
-    sender = 'PolarSendReq@163.com'
-    passwd = 'PolarEmail1234'
-    # sender = 'fanying_yt@163.com'
-    # passwd = 'fy1259680'
+    sender, passwd = getemailpsw(0)
+    sender = sender + '@lamda.nju.edu.cn'
 
     msg = MIMEMultipart()
     msg['to'] = receiver
@@ -28,8 +27,9 @@ def send(receiver, subject):
     # smtp.quit()
     # return True
     try:
-        smtp = smtplib.SMTP()
-        smtp.connect('smtp.163.com')
+        smtp = smtplib.SMTP_SSL()
+        smtp.connect('210.28.132.67', 465)
+        smtp.ehlo()
         smtp.login(sender, passwd)
         smtp.sendmail(sender, receiver, msg.as_string())
         smtp.quit()

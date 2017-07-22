@@ -13,6 +13,7 @@ import tkMessageBox
 import send_mail
 import get_email_zip
 import unzipfile
+from mailutil import getemailpsw
 import clearfile
 from time import sleep
 from datetime import datetime
@@ -22,10 +23,23 @@ from collections import Counter     # to get mode of a list
 import numpy as np
 import matplotlib.pyplot as plt     # draw cost diagram
 
-from PIL import ImageTk, Image, ImageDraw, ImageFont
+from PIL import ImageTk, Image, ImageGrab
 
 # hand-written modules of this project
 from getpath import ModisMap
+
+import ctypes
+import win32gui
+import ctypes.wintypes
+
+class RECT(ctypes.Structure):
+    _fields_ = [('left', ctypes.c_long),
+                ('top', ctypes.c_long),
+                ('right', ctypes.c_long),
+                ('bottom', ctypes.c_long)]
+    def __str__(self):
+        return str((self.left, self.top, self.right, self.bottom))
+
 
 
 # todo list 
@@ -92,11 +106,6 @@ class MainWindow(object):
 
         self.operation_file = None
 
-        self.printmodisimg = None
-        self.printcostimg = None
-        self.drawmodisimg = None
-        self.drawcostimg = None
-
         self.__init_models()
 
         # member var for ui
@@ -115,9 +124,9 @@ class MainWindow(object):
         self.ice_weight = 0.0
         self.path = []
         self.show_cost = False
-        self.default_zoom_factor = 0.2
+        self.default_zoom_factor = 0.1
         self.zoom_factor= 1.0
-        self.zoom_level = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.5]    # final static
+        self.zoom_level = [0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.375, 0.5, 1.0]   # final static
         self.optimize_target = tk.StringVar()   # control var of om (optionmenu), domain{'', '最便捷路径', '路程与破冰'}
         self.mouse_status = tk.IntVar()         # control var of b0, b1 and b2 (radiobutton group), domain{1, 2, 3}
                                             # self.mouse_status.get() ==0    # drag mouse to move image
@@ -135,16 +144,20 @@ class MainWindow(object):
         self.tag_end_point = None
         self.tag_left_point = None
         self.tag_right_point = None
-        self.tag_query_point = None
-        self.tag_rect = None
-        self.tag_infotext = None
+        # self.tag_query_point = None
+        # self.tag_rect = None
+        # self.tag_infotext = None
+        self.is_gen_path = True
+        self.is_send_sar = True
+        self.is_add_op = True
 
-            
         # now building ui
         # firstly, determining canvas window size by the system screensize
 
         basic_size = (master.winfo_screenheight() / 100) * 100 - 150
         basic_size = min(850, max(600, basic_size)) # 600 650 750 850
+
+        self.basic_size = basic_size
 
         # then, 3 main frames
         frame_left_top = tk.Frame(master, width=basic_size, height=basic_size)
@@ -153,6 +166,11 @@ class MainWindow(object):
         frame_left_top.grid(row=0, column=0, padx=2, pady=2)
         frame_left_bottom.grid(row=1, column=0)
         frame_right.grid(row=0, column=1, rowspan=2, padx=1, pady=2)
+
+        # subframe = tk.Frame(frame_left_top)
+        # subframe.pack(side='bottom', fill='x', expand=False)
+        # sublabel = tk.Label(subframe, text='Bottom Left')
+        # sublabel.pack(side='left')
 
         # building frame_left_top
         self.imtk = ImageTk.PhotoImage(self.modisimg)
@@ -178,7 +196,7 @@ class MainWindow(object):
         b0 = tk.Radiobutton(frame_left_bottom, text="默认", variable=self.mouse_status, value=0)
         b1 = tk.Radiobutton(frame_left_bottom, text="设置起点", variable=self.mouse_status, value=1)
         b2 = tk.Radiobutton(frame_left_bottom, text="设置终点", variable=self.mouse_status, value=2)
-        br = tk.Radiobutton(frame_left_bottom, text="显示信息", variable=self.mouse_status, value=3)
+        # br = tk.Radiobutton(frame_left_bottom, text="显示信息", variable=self.mouse_status, value=3)
         b3 = tk.Button(frame_left_bottom, text='显示/隐藏热力图', command=self.__callback_b3_showhide_cost)
         b4 = tk.Button(frame_left_bottom, text='显示/隐藏经纬网', command=self.__callback_b4_showhide_graticule)
         b5 = tk.Button(frame_left_bottom, text='-', width=2, command=self.__callback_b5_zoomout)
@@ -186,12 +204,15 @@ class MainWindow(object):
         b0.grid(row=0, column=0)
         b1.grid(row=0, column=1)
         b2.grid(row=0, column=2)
-        br.grid(row=0, column=3)
-        b3.grid(row=0, column=4)
-        b4.grid(row=0, column=5)    # a blank label between column 4 and 6
-        b5.grid(row=0, column=6)
-        b6.grid(row=0, column=8)    # a scale label between column 6 and 8
+        # br.grid(row=0, column=3)
+        b3.grid(row=0, column=3)
+        b4.grid(row=0, column=4)    # a blank label between column 4 and 6
+        b5.grid(row=0, column=5)
+        b6.grid(row=0, column=7)    # a scale label between column 6 and 8
         # b_k.grid(row=0, column=5)
+
+        b9 = tk.Button(frame_left_bottom, command=self.__callback_b9_reset, text='复位')
+        b9.grid(row=0, column=8, columnspan=2, padx=30)
 
         # blank = tk.Label(frame_left_bottom)
         # blank.grid(row=0, column=5, padx=40)
@@ -199,7 +220,7 @@ class MainWindow(object):
         self.zoom_text = tk.StringVar()
         self.zoom_text.set('%d' % (self.zoom_factor * 100) + '%')
         scale_label = tk.Label(frame_left_bottom, textvariable = self.zoom_text, width=6)
-        scale_label.grid(row=0, column=7)
+        scale_label.grid(row=0, column=6)
 
 
         # building frame_right
@@ -208,12 +229,11 @@ class MainWindow(object):
         l3 = tk.Label(frame_right, text='终点经度')
         l4 = tk.Label(frame_right, text='终点纬度')
         l5 = tk.Label(frame_right, text='最小间距')
-        l1.grid(row=0, column=0, pady=15)
-        l2.grid(row=1, column=0, pady=15)
-        l3.grid(row=2, column=0, pady=15)
-        l4.grid(row=3, column=0, pady=15)
-        l5.grid(row=4, column=0, pady=15)
-        
+        l1.grid(row=0, column=0, pady=10)
+        l2.grid(row=1, column=0, pady=10)
+        l3.grid(row=2, column=0, pady=10)
+        l4.grid(row=3, column=0, pady=10)
+        l5.grid(row=4, column=0, pady=10)
         
         self.e1 = tk.Entry(frame_right, width=10)
         self.e2 = tk.Entry(frame_right, width=10)
@@ -238,7 +258,7 @@ class MainWindow(object):
         # blank.grid(row=5)
 
         l6 = tk.Label(frame_right, text='考虑因素')
-        l6.grid(row=6, column=0, pady=15)
+        l6.grid(row=6, column=0, pady=10)
 
         option_list = ['最便捷路径', '路程与破冰']
         om = tk.OptionMenu(frame_right, self.optimize_target, *option_list, command=self.__callback_optionchange)   # callback to auto show/hide sc&sct
@@ -248,31 +268,33 @@ class MainWindow(object):
         frame_temp = tk.Frame(frame_right)
         frame_temp.grid(row=7, column=0, columnspan=2)
 
-        self.sc = tk.Scale(frame_temp, from_=0, to=1, resolution=0.01, width=11, length=120, orient=tk.HORIZONTAL)
+        self.sc = tk.Scale(frame_temp, from_=0, to=4, resolution=0.01, width=11, length=120, orient=tk.HORIZONTAL)
         self.sct = tk.Label(frame_temp, text='更短路径   更少破冰', font=('Purisa', 9))
         self.sc.grid(row=0, column=1)
         self.sct.grid(row=1, column=1)
-        # self.sc.grid_remove()
-        # self.sct.grid_remove()
+        self.sc.grid_remove()
+        self.sct.grid_remove()
         self.b10 = tk.Button(frame_temp, text='-', command=self.__callback_b10_minus)
         self.b11 = tk.Button(frame_temp, text='+', command=self.__callback_b11_add)
         self.b10.grid(row=0, column=0)
         self.b11.grid(row=0, column=2)
-        # self.b10.grid_remove()
-        # self.b11.grid_remove()
+        self.b10.grid_remove()
+        self.b11.grid_remove()
 
 
         b7 = tk.Button(frame_right, command=self.__callback_b7_genpath, text='生成路径')
-        b7.grid(row=9, column=0, columnspan=2, pady=15)
+        b7.grid(row=9, column=0, columnspan=1, pady=10)
+        b_hp = tk.Button(frame_right, command=self.__callback_bhp_hidepath, text='隐藏路径')
+        b_hp.grid(row=9, column=1, columnspan=1, pady=10)
 
         # blank = tk.Label(frame_right, height=3)
         # blank.grid(row=10)
 
         b_print = tk.Button(frame_right, command=self.__callback_print_trace, text='打印路径')
-        b_print.grid(row=10, column=0, columnspan=2, pady=15)
+        b_print.grid(row=10, column=0, columnspan=2, pady=10)
 
         b_sa = tk.Button(frame_right, command=self.__callback_sar_send, text='请求SAR图')
-        b_sa.grid(row=11, column=0, columnspan=2, pady=15)
+        b_sa.grid(row=11, column=0, columnspan=2, pady=10)
 
         # row 11-19 is empty here for adding widget in future
 
@@ -289,10 +311,12 @@ class MainWindow(object):
         #b8.grid(row=22, column=0, columnspan=2, pady=20)
 
         b_re = tk.Button(frame_right, command=self.__update_files, text='更新')
-        b_re.grid(row=12, column=0, columnspan=2, pady=15)
+        b_re.grid(row=12, column=0, columnspan=2, pady=10)
 
-        b9 = tk.Button(frame_right, command=self.__callback_b9_reset, text='复位')
-        b9.grid(row=13, column=0, columnspan=2, pady=15)
+        self.message_var = tk.StringVar()
+        self.message_var.set('')
+        mess = tk.Message(frame_right, textvariable=self.message_var, relief=tk.RAISED)
+        mess.grid(row=13, column=0, columnspan=2, pady=10)
 
         # ui widget code ends
 
@@ -306,6 +330,8 @@ class MainWindow(object):
         for e in [self.e1, self.e2, self.e3, self.e4]:
             e.bind('<FocusOut>', self.__event_entry_input)
             e.bind('<Return>', self.__event_entry_input)
+            # e.bind('<Tab>', self.__event_entry_input)
+            e.bind('<Leave>', self.__event_entry_input)
 
         self.__rescale(self.default_zoom_factor)
 
@@ -397,6 +423,9 @@ class MainWindow(object):
         self.__rescale(new_factor)
 
     def __callback_b7_genpath(self):
+        # if not self.is_gen_path:
+        #     tkMessageBox.showerror('Error', '存在不合法输入！')
+        #     return
 
         mark2 = False
         if '' in [self.e1.get(), self.e2.get(), self.e3.get(), self.e4.get(), self.optimize_target.get()]:
@@ -421,10 +450,11 @@ class MainWindow(object):
             mark = 0
         elif target == u'路程与破冰':
             mark = 1
-            if self.ice_weight == 0.0:
-                ratio = float(self.sc.get())
-            else:
-                ratio = self.ice_weight
+            ratio = float(self.sc.get())
+            # if self.ice_weight == 0.0:
+            #     ratio = float(self.sc.get())
+            # else:
+            #     ratio = self.ice_weight
 
         # assert 0 <= ratio <= 1
 
@@ -485,31 +515,29 @@ class MainWindow(object):
             end = self.__find_geocoordinates(self.current_op_points[-1][0], self.current_op_points[-1][1])
 
         # self.current_op_points = []
-        self.__draw_diagram(start, end, path)
+        # self.__draw_diagram(start, end, path)
+
+    def __callback_bhp_hidepath(self):
+        if self.tag_path != []:
+            [self.canvas.delete(p) for p in self.tag_path]
+            self.tag_path = []
 
     # todo
     def __callback_print_trace(self):
+        printname = 'print.jpg'
 
-        # printname = ''
-        # # draw and save image, then print
-        # if self.show_cost:
-        #     # operation on printcostimg
-        #     self.__print_save_img()
-        #     del self.printcostimg
-        #     printname = 'printcostimg.jpg'
-        #     self.costimg.save(printname)
-        #     self.printcostimg = ImageDraw.Draw(self.costimg)
-        # else:
-        #     # operation on printmodisimg
-        #     self.__print_save_img()
-        #     del self.printmodisimg
-        #     printname = 'printmodisimg.jpg'
-        #     self.drawmodisimg.show()
-        #     self.drawmodisimg.save(printname)
-        #     # self.modisimg.save(sys.stdout, "PNG")
-        #     self.printmodisimg = ImageDraw.Draw(self.modisimg)
-        # import printer
-        # printer.send_to_printer(printname)
+        # get current window
+        rect = RECT()
+        HWND = win32gui.GetForegroundWindow()
+        ctypes.windll.user32.GetWindowRect(HWND,ctypes.byref(rect))
+        rangle = (rect.left+2,rect.top+2,rect.right-2,rect.bottom-2)
+
+        # grab picture and save
+        pic = ImageGrab.grab(rangle)
+        pic.save(printname)
+
+        import printer
+        printer.send_to_printer(printname)
         return
 
     def __callback_sar_send(self):
@@ -534,6 +562,7 @@ class MainWindow(object):
         self.entry_mail.bind('<Tab>', self.__event_email_check)
         self.entry_mail.bind('<FocusOut>', self.__event_email_check)
         self.entry_mail.bind('<Return>', self.__event_email_check)
+        self.entry_mail.bind('<Leave>', self.__event_email_check)
 
         self.label_leftlon = tk.Label(self.frame_range, text='左上角经度:')
         self.label_leftlon.grid(row=0, column=0, padx=5, pady=5)
@@ -558,6 +587,7 @@ class MainWindow(object):
         for e in [self.entry_leftlon, self.entry_leftlat, self.entry_rightlon, self.entry_rightlat]:
             e.bind('<FocusOut>', self.__event_range_input)
             e.bind('<Return>', self.__event_range_input)
+            e.bind('<Leave>', self.__event_range_input)
 
         self.button_send = tk.Button(self.frame_range, width=7, text='发送', command=self.__callback_send_require)
         self.button_send.grid(row=2, column=1, columnspan=2, padx=5, pady=20)
@@ -582,27 +612,48 @@ class MainWindow(object):
         # clear canvas
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.imtk, anchor='nw')
-        self.__draw_operation_point()
+        # self.__draw_operation_point()
+
+        self.tag_operation_point = []
+
+        if len(self.current_op_points) != 0:
+            for item in self.current_op_points:
+                self.current_op_points.remove(item)
+
+        self.current_op_points = []
+        for item in self.recent_op_points:
+            lon, lat = item[0], item[1]
+
+            try:
+                i, j = self.__find_geocoordinates(lon, lat)
+            except RuntimeError:
+                pass
+            else:
+                self.current_op_points.append((lon, lat))
+                # i, j = self.__find_geocoordinates(lon, lat)
+                x, y = self.__matrixcoor2canvascoor(i, j)
+                self.tag_operation_point.append(self.canvas.create_oval(x-5, y-5, x+5, y+5, fill='yellow'))
 
         # clear canvas tags
         self.tag_graticule = []
         # self.tag_operation_point = []
         self.tag_start_point = None
         self.tag_end_point = None
-        self.tag_query_point = None
+        # self.tag_query_point = None
         self.tag_temp_point = None
-        self.tag_rect = None
-        self.tag_infotext = None
+        # self.tag_rect = None
+        # self.tag_infotext = None
         self.tag_path = []
 
         self.__rescale(self.default_zoom_factor)
 
     def __callback_b10_minus(self):
         ratio = float(self.sc.get())
-        if self.ice_weight > 1.0:
-            self.ice_weight = self.ice_weight - 0.5
-            tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
-        elif ratio == 0.0:
+        # if self.ice_weight > 1.0:
+        #     self.ice_weight = self.ice_weight - 0.5
+        #     tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
+        # elif ratio == 0.0:
+        if ratio == 0.0:
             tkMessageBox.showinfo("Info", "已达到最小值0.0，不可再减小！")
         else:
             ratio = ratio - 0.01
@@ -610,22 +661,27 @@ class MainWindow(object):
 
     def __callback_b11_add(self):
         ratio = float(self.sc.get())
-        if ratio < 1.0:
-            self.ice_weight = 0
-        if self.ice_weight == 4.0:
-            tkMessageBox.showinfo("Info", "最少破冰权值为%.2f，不可再增加！"%self.ice_weight)
-            return
-        if self.ice_weight >= 1.0:
-            self.ice_weight = self.ice_weight + 0.5
-            tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
+        if ratio == 4.0:
+            tkMessageBox.showinfo("Info", "已达到最大值4.0，不可再增加！")
         else:
             ratio = ratio + 0.01
             self.sc.set(ratio)
-            if ratio == 1.0:
-                self.ice_weight = 1.0
-            elif ratio > 1.0:
-                self.ice_weight = 1.5
-                tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
+        # if ratio < 1.0:
+        #     self.ice_weight = 0
+        # if self.ice_weight == 4.0:
+        #     tkMessageBox.showinfo("Info", "最少破冰权值为%.2f，不可再增加！"%self.ice_weight)
+        #     return
+        # if self.ice_weight >= 1.0:
+        #     self.ice_weight = self.ice_weight + 0.5
+        #     tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
+        # else:
+        #     ratio = ratio + 0.01
+        #     self.sc.set(ratio)
+        #     if ratio == 1.0:
+        #         self.ice_weight = 1.0
+        #     elif ratio > 1.0:
+        #         self.ice_weight = 1.5
+        #         tkMessageBox.showinfo("Info", "最少破冰权值为%.2f"%self.ice_weight)
 
     def __callback_optionchange(self, option):
 
@@ -687,10 +743,11 @@ class MainWindow(object):
         self.entry_lon.bind('<Tab>', self.__point_frame_input_check)
         self.entry_lon.bind('<FocusOut>', self.__point_frame_input_check)
         self.entry_lon.bind('<Return>', self.__point_frame_input_check)
+        self.entry_lon.bind('<Leave>', self.__point_frame_input_check)
 
         self.entry_lat.bind('<Tab>', self.__point_frame_input_check)
         self.entry_lat.bind('<FocusOut>', self.__point_frame_input_check)
-        self.entry_lat.bind('<Return>', self.__point_frame_input_check)
+        self.entry_lat.bind('<Leave>', self.__point_frame_input_check)
 
         scrollbar = tk.Scrollbar(self.frame_list)
         scrollbar.grid(row=0, column=1, sticky='ns')
@@ -701,7 +758,10 @@ class MainWindow(object):
         for i in xrange(len(self.recent_op_points)):
             v = "经度"+'{:.2f}'.format(self.recent_op_points[i][0])+"，纬度"+'{:.2f}'.format(self.recent_op_points[i][1])
             self.list.insert(tk.END, v)
-        self.list.bind("<Double-Button-1>", self.__event_operation_point)
+        # self.list.bind("<Double-Button-1>", self.__event_operation_point)
+        self.list.bind('<Motion>', self.__event_listbox_motion)
+        self.list.bind("<Button-1>", self.__event_operation_point)
+
         scrollbar.config(command=self.list.yview)
 
         self.label_list = tk.Label(self.frame_info, text='最近增加作业点')
@@ -817,6 +877,10 @@ class MainWindow(object):
                 or self.entry_rightlon.get()=='' or self.entry_rightlat.get()=='':
             tkMessageBox.showerror('Error', '输入不完整')
 
+        # if not self.is_send_sar:
+        #     tkMessageBox.showerror('Error', '存在不合法输入！')
+        #     return
+
         self.canvas.delete(self.tag_left_point)
         self.canvas.delete(self.tag_right_point)
 
@@ -826,21 +890,21 @@ class MainWindow(object):
         rightlon = self.__check_input(self.entry_rightlon.get(), True)
         rightlat = self.__check_input(self.entry_rightlat.get(), False)
 
-        pos_text1 = "(" + str(leftlat)
+        pos_text1 = "(" + str(abs(leftlat))
         if leftlat > 0:
-            pos_text1 = pos_text1 + "N " + str(leftlon)
+            pos_text1 = pos_text1 + "N " + str(abs(leftlon))
         else:
-            pos_text1 = pos_text1 + "S " + str(leftlon)
+            pos_text1 = pos_text1 + "S " + str(abs(leftlon))
         if leftlon > 0:
             pos_text1 = pos_text1 + "E)"
         else:
             pos_text1 = pos_text1 + "W)"
 
-        pos_text2 = "(" + str(rightlat)
+        pos_text2 = "(" + str(abs(rightlat))
         if rightlat > 0:
-            pos_text2 = pos_text2 + "N " + str(rightlon)
+            pos_text2 = pos_text2 + "N " + str(abs(rightlon))
         else:
-            pos_text2 = pos_text2 + "S " + str(rightlon)
+            pos_text2 = pos_text2 + "S " + str(abs(rightlon))
         if rightlon > 0:
             pos_text2 = pos_text2 + "E)"
         else:
@@ -871,7 +935,8 @@ class MainWindow(object):
 
         status = self.mouse_status.get()
 
-        if status == 0 or status == 3:     # normal
+        # if status == 0 or status == 3:     # normal
+        if status == 0:     # normal
             canvas.scan_mark(event.x, event.y)
 
         elif status == 1:   # click to set starting point
@@ -953,66 +1018,81 @@ class MainWindow(object):
     def __event_canvas_motion(self, event):
         canvas = event.widget
 
-        if self.mouse_status.get() == 3:
-            x, y = int(canvas.canvasx(event.x)), int(canvas.canvasy(event.y))     # x y is canvas coordinates
+        # if self.mouse_status.get() == 3:
+        x, y = int(canvas.canvasx(event.x)), int(canvas.canvasy(event.y))     # x y is canvas coordinates
 
-            if x <= 0 or x >= self.imtk.width() or y <= 0 or y >= self.imtk.height():
-                return
+        if x <= 0 or x >= self.imtk.width() or y <= 0 or y >= self.imtk.height():
+            return
 
-            if self.tag_query_point != None:
-                self.canvas.delete(self.tag_query_point)
-                self.canvas.delete(self.tag_rect)
-                self.canvas.delete(self.tag_infotext)
-                self.tag_query_point = self.tag_rect = self.tag_infotext = None
-                return
+        # if self.tag_query_point != None:
+        #     self.canvas.delete(self.tag_query_point)
+        #     # self.canvas.delete(self.tag_rect)
+        #     self.canvas.delete(self.tag_infotext)
+        #     self.tag_query_point = self.tag_infotext = None
+        #     # self.tag_rect = None
+        #     return
 
-            i, j = self.__canvascoor2matrixcoor(x, y)
+        i, j = self.__canvascoor2matrixcoor(x, y)
 
-            lon = self.lonlat_mat[i, j][0]
-            lat = self.lonlat_mat[i, j][1]
-            prob = self.prob_mat[i, j]
-            mask = self.ice_mat[i, j]
+        lon = self.lonlat_mat[i, j][0]
+        lat = self.lonlat_mat[i, j][1]
+        prob = self.prob_mat[i, j]
+        mask = self.ice_mat[i, j]
 
-            areatext = '浮冰面积小于'
-            if prob[2] > 0.3:
-                areatext = areatext + '{:.2f}'.format(prob[2]*25) + '平方公里'
-            else:
-                areatext = areatext + '{:.2f}'.format(prob[1]*25) + '平方公里'
+        areatext = '浮冰面积<'
+        if prob[2] > 0.3:
+            areatext = areatext + '{:.2f}'.format(prob[2]*25) + 'km2'
+        else:
+            areatext = areatext + '{:.2f}'.format(prob[1]*25) + 'km2'
 
-            text_cotent = '经度: %.2f, 纬度: %.2f'%(lon, lat) + '\n' + \
-                '海: %.4f'%prob[0] + '\n' + \
-                '薄冰薄云: %.4f'%prob[1] + '\n' + \
-                '厚冰厚云: %.4f'%prob[2]
+        text_cotent = '海: %.4f'%prob[0] + '\n' + '薄冰/云: %.4f'%prob[1] + '\n' + '厚冰/云: %.4f'%prob[2]
 
-            # print mask
+        # print mask
 
-            if mask:
-                text_cotent = text_cotent + '(厚冰)'
-            else:
-                text_cotent = text_cotent + '(厚云)'
+        if mask:
+            text_cotent = text_cotent + '(厚冰)'
+        else:
+            text_cotent = text_cotent + '(厚云)'
 
-            text_cotent = text_cotent + '\n' + areatext
+        text_cotent = text_cotent + '\n' + areatext
 
-            x_offset, y_offset = 220, 90
+        postion = ''
+        if lat > 0:
+            postion = postion + '(%.2f °N'%abs(lat)
+        else:
+            postion = postion + '(%.2f °S'%abs(lat)
 
-            if event.x >= int(self.canvas['width']) - x_offset:
-                x_offset = -x_offset
-            if event.y >= int(self.canvas['height']) - y_offset:
-                y_offset = -y_offset
+        if lon > 0:
+            postion = postion + ', %.2f °E)'%abs(lon)
+        else:
+            postion = postion + ', %.2f °W)'%abs(lon)
 
-            self.tag_query_point = self.canvas.create_oval(x-5, y-5, x+5, y+5, fill='green')
-            self.tag_rect = self.canvas.create_rectangle(x, y, x+x_offset, y+y_offset, outline="grey", fill="WhiteSmoke")
-            self.tag_infotext = self.canvas.create_text( min(x, x+x_offset), min(y, y+y_offset)+45, anchor='w', font=("Purisa", 11), text=text_cotent)
+        # text_cotent = text_cotent + '\n' + postion
+        text_cotent = postion + '\n' + text_cotent
+
+        # x_offset, y_offset = 220, 90
+        #
+        # if event.x >= int(self.canvas['width']) - x_offset:
+        #     x_offset = -x_offset
+        # if event.y >= int(self.canvas['height']) - y_offset:
+        #     y_offset = -y_offset
+
+        self.message_var.set(text_cotent)
+        # self.tag_query_point = self.canvas.create_oval(x-5, y-5, x+5, y+5, fill='green')
+        # self.tag_rect = self.canvas.create_rectangle(x, y, x+x_offset, y+y_offset, outline="grey", fill="WhiteSmoke")
+        # self.tag_infotext = self.canvas.create_text(5, self.basic_size-5, anchor='w', font=("Purisa", 6), text=text_cotent)
 
     def __event_canvas_leave(self, event):
-        canvas = event.widget
-
-        if self.mouse_status.get() == 3:
-            if self.tag_query_point != None:
-                self.canvas.delete(self.tag_query_point)
-                self.canvas.delete(self.tag_rect)
-                self.canvas.delete(self.tag_infotext)
-                self.tag_query_point = self.tag_rect = self.tag_infotext = None
+        # canvas = event.widget
+        #
+        # if self.mouse_status.get() == 3:
+        #     if self.tag_query_point != None:
+        #         self.canvas.delete(self.tag_query_point)
+        #         # self.canvas.delete(self.tag_rect)
+        #         self.canvas.delete(self.tag_infotext)
+        #         self.tag_query_point = self.tag_infotext = None
+        #         # self.tag_rect = None
+        pass
 
     def __event_entry_input(self, event):
 
@@ -1037,17 +1117,33 @@ class MainWindow(object):
                 i, j = self.__find_geocoordinates(lon, lat)
 
         except ValueError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','不是合法的输入')
+            # entry.delete(0, 'end')
+            if entry.get() != "":
+                entry['bg'] = 'red'
+            self.is_gen_path = False
+            # tkMessageBox.showerror('Wrong','不是合法的输入')
 
         except IndexError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # entry.delete(0, 'end')
+            if entry.get() != "":
+                entry['bg'] = 'blue'
+            self.is_gen_path = False
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
 
         except RuntimeError:
-            g[0].delete(0, 'end')
-            g[1].delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # g[0].delete(0, 'end')
+            # g[1].delete(0, 'end')
+            g[0]['bg'] = 'yellow'
+            g[1]['bg'] = 'yellow'
+            self.is_gen_path = False
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
+
+        else:
+            entry['bg'] = 'white'
+            if g[0]['bg'] == 'yellow' or g[1]['bg'] == 'yellow':
+                g[0]['bg'] = 'white'
+                g[1]['bg'] = 'white'
+            self.is_gen_path = True
 
         # draw anyway even if exception
         if g == gstart:
@@ -1055,19 +1151,41 @@ class MainWindow(object):
         else:
             self.__draw_end_point()
 
-    def __event_operation_point(self, event):
-        items = self.list.curselection()
-        # print self.list.get(items)
-        index = items[0]
-        # print index
+    def __event_listbox_motion(self, event):
+        try:
+            items = self.list.curselection()
+            # print self.list.get(items)
+            index = items[0]
+            # print index
 
-        if index < len(self.recent_op_points):
-            lon, lat = self.recent_op_points[index]
-            self.entry_lon.delete(0, 'end')
-            self.entry_lon.insert(0, str('%0.2f'%lon))
-            self.entry_lat.delete(0, 'end')
-            self.entry_lat.insert(0, str('%0.2f'%lat))
-            self.__draw_temp_point()
+            if index < len(self.recent_op_points):
+                lon, lat = self.recent_op_points[index]
+                self.entry_lon.delete(0, 'end')
+                self.entry_lon.insert(0, str('%0.2f'%lon))
+                self.entry_lat.delete(0, 'end')
+                self.entry_lat.insert(0, str('%0.2f'%lat))
+                self.__draw_temp_point()
+        except:
+            pass
+
+
+
+    def __event_operation_point(self, event):
+        try:
+            items = self.list.curselection()
+            # print self.list.get(items)
+            index = items[0]
+            # print index
+
+            if index < len(self.recent_op_points):
+                lon, lat = self.recent_op_points[index]
+                self.entry_lon.delete(0, 'end')
+                self.entry_lon.insert(0, str('%0.2f'%lon))
+                self.entry_lat.delete(0, 'end')
+                self.entry_lat.insert(0, str('%0.2f'%lat))
+                self.__draw_temp_point()
+        except:
+            pass
 
     def __point_frame_input_check(self, event):
         entry = event.widget
@@ -1086,27 +1204,48 @@ class MainWindow(object):
                 i, j = self.__find_geocoordinates(lon, lat)
 
         except ValueError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','不是合法的输入')
+            # entry.delete(0, 'end')
+            # tkMessageBox.showerror('Wrong','不是合法的输入')
+            if entry.get() != '':
+                entry['bg'] = 'red'
+            self.is_add_op = False
 
         except IndexError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # entry.delete(0, 'end')
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            if entry.get() != '':
+                entry['bg'] = 'blue'
+            self.is_add_op = False
 
         except RuntimeError:
-            self.entry_lon.delete(0, 'end')
-            self.entry_lat.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # self.entry_lon.delete(0, 'end')
+            # self.entry_lat.delete(0, 'end')
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            self.entry_lon['bg'] = 'yellow'
+            self.entry_lat['bg'] = 'yellow'
+            self.is_add_op = False
+
+        else:
+            entry['bg'] = 'white'
+            if self.entry_lon['bg'] == 'yellow' or self.entry_lat['bg'] == 'yellow':
+                self.entry_lon['bg'] = 'white'
+                self.entry_lat['bg'] = 'white'
+            self.is_add_op = True
 
         self.__draw_temp_point()
 
     def __event_email_check(self, event):
-        pattern = '^[0-9a-zA-Z_]{0,19}@[0-9a-zA-Z]{1,13}\.[com,cn,net]{1,3}$'
+        pattern = '^(\w)+(\.\w+)*@(\w)+((\.\w+)+)$'
         if self.entry_mail.get() == '':
             return
         if re.match(pattern, self.entry_mail.get()) == None:
-            self.entry_mail.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','邮箱地址不合法')
+            # self.entry_mail.delete(0, 'end')
+            # tkMessageBox.showerror('Wrong','邮箱地址不合法')
+            self.entry_mail['bg'] = 'red'
+            self.is_send_sar = False
+        else:
+            self.entry_mail['bg'] = 'white'
+            self.is_send_sar = True
 
     def __event_range_input(self, event):
         entry = event.widget
@@ -1130,17 +1269,33 @@ class MainWindow(object):
                 i, j = self.__find_geocoordinates(lon, lat)
 
         except ValueError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','不是合法的输入')
+            # entry.delete(0, 'end')
+            if entry.get() != "":
+                entry['bg'] = 'red'
+            self.is_send_sar = False
+            # tkMessageBox.showerror('Wrong','不是合法的输入')
 
         except IndexError:
-            entry.delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # entry.delete(0, 'end')
+            if entry.get() != "":
+                entry['bg'] = 'blue'
+            self.is_send_sar = False
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
 
         except RuntimeError:
-            g[0].delete(0, 'end')
-            g[1].delete(0, 'end')
-            tkMessageBox.showerror('Wrong','经纬度不在范围内')
+            # g[0].delete(0, 'end')
+            # g[1].delete(0, 'end')
+            g[0]['bg'] = 'yellow'
+            g[1]['bg'] = 'yellow'
+            self.is_send_sar = False
+            # tkMessageBox.showerror('Wrong','经纬度不在范围内')
+
+        else:
+            entry['bg'] = 'white'
+            if g[0]['bg'] == 'yellow' or g[1]['bg'] == 'yellow':
+                g[0]['bg'] = 'white'
+                g[1]['bg'] = 'white'
+            self.is_send_sar = True
 
         # draw anyway even if exception
         if g == gleft:
@@ -1176,7 +1331,7 @@ class MainWindow(object):
 
         self.modisimgfile = modisimgfile
 
-        beta = 5
+        beta = 20
 
         fprob = open(probfile,'rb')
         flonlat = open(lonlatfile, 'rb')
@@ -1195,19 +1350,12 @@ class MainWindow(object):
         if self.modisimg.size[0] > 6000 or self.modisimg.size[1] > 6000:
             print 'Warning: current modis image file large than 6000*6000'
 
-        # self.drawmodisimg = Image.open(modisimgfile)
-        # self.drawmodistimg = self.modisimg.crop((0, 0, (self.drawmodisimg.width/beta)*beta, (self.drawmodisimg.height/beta)*beta))   # divisible by beta
-        #
-        # self.drawcostimg = Image.open(costimgfile)
-        # self.drawcostimg = self.drawcostimg.resize((int(self.prob_mat.shape[1] * beta), int(self.prob_mat.shape[0] * beta)))
-        #
-        # self.printmodisimg = ImageDraw.Draw(self.drawmodisimg)
-        # self.printcostimg = ImageDraw.Draw(self.drawcostimg)
-
         self.model = ModisMap(self.prob_mat)
 
+        if self.modisimg.size != self.costimg.size:
+            self.__update_files()
+
         assert self.modisimg.size == self.costimg.size
-        # assert self.iceorcloud_mat.shape == self.prob_mat.shape
         assert self.prob_mat.shape[0:2] == self.lonlat_mat.shape[0:2]
         assert self.prob_mat.shape[0] * beta  == self.modisimg.size[1]
         assert self.prob_mat.shape[1] * beta  == self.modisimg.size[0]
@@ -1266,7 +1414,7 @@ class MainWindow(object):
 
         # do rescaling works
         self.zoom_factor = new_factor
-        self.zoom_text.set('%d' % (new_factor * 100) + '%')
+        self.zoom_text.set('%d' % (new_factor * 400) + '%')
 
         img = self.modisimg
         if self.show_cost:
@@ -1281,7 +1429,8 @@ class MainWindow(object):
         self.__draw_end_point()
         self.__draw_path()
         self.__draw_temp_point()
-        self.tag_query_point = self.tag_rect = self.tag_infotext = None
+        # self.tag_query_point = self.tag_infotext = None
+        # self.tag_rect = None
 
         if self.tag_operation_point != []:
             self.__draw_operation_point()
@@ -1390,7 +1539,7 @@ class MainWindow(object):
                 x2, y2 = self.__matrixcoor2canvascoor(i_list[-1], j_list[-1])
                 g = self.canvas.create_line(x1, y1, x2, y2, fill='SeaGreen', width=width)
                 # self.printcostimg.line([x1, y1, x2, y2], fill='SeaGreen', width=width)
-                t = self.canvas.create_text(x2-2, y2-1, anchor='se', font=("Purisa",fontsize), fill='SeaGreen', text=str(int(round(lon_mat[i_list[-1], j_list[-1]]))))
+                t = self.canvas.create_text(x2-2, y2-1, anchor='se', font=("Purisa",fontsize, 'bold'), fill='SeaGreen', text=str(int(round(lon_mat[i_list[-1], j_list[-1]]))))
                 self.tag_graticule.append(g)
                 self.tag_graticule.append(t)
 
@@ -1400,8 +1549,9 @@ class MainWindow(object):
 
         # assert polar[0] != None and polar[1] != None
         if polar[0] != None and polar[1] != None:
-            assert 0 < polar[0] < ilen
-            assert 0 < polar[1] < jlen
+            # print polar[0], polar[1]
+            assert 0 <= polar[0] < ilen
+            assert 0 <= polar[1] < jlen
 
             # draw latitude circles
             # notice that all latitude circles center at polar
@@ -1505,25 +1655,98 @@ class MainWindow(object):
 
         if polar[0] == None or polar[1] == None:
             # draw latitude lines
-            for v in range(-80, -50, 5):
-                line_points = []
-                for j in range(0, jlen, 10):
+            for v in range(50, 90, 1):
+                line_points1 = []
+                line_points2 = []
+                for j in range(0, jlen, 1):
                     lat = lat_mat[:, j]
                     i = int(np.fabs(lat - v).argmin())
                     diff = np.fabs(lat[i] - v)
                     if i > 0 and i < ilen-1  and diff < 0.1:
-                        line_points.append((i, j))
+                        if lon_mat[i][j] <= 0:
+                            line_points1.append((i, j, lon_mat[i][j]))
+                        else:
+                            line_points2.append((i,j,lon_mat[i][j]))
+                line_points1=sorted(line_points1,key=lambda line_points1 : line_points1[2])
+                line_points2=sorted(line_points2,key=lambda line_points2 : line_points2[2])
 
-                for i in range(0, len(line_points)-1):
-                    cx, cy = self.__matrixcoor2canvascoor(line_points[i][0], line_points[i][1])
-                    nx, ny = self.__matrixcoor2canvascoor(line_points[i+1][0], line_points[i+1][1])
+                # d = []
+                # if len(line_points)==0:
+                #     pass
+                # else:
+                #     print len(line_points)
+                #
+                #     for j in range(len(line_points)):
+                #         for i in range(j+1,len(line_points)):
+                #             d.append((j, i, (line_points[j][0] - line_points[i][0])*(line_points[j][0] - line_points[i][0])+ (line_points[j][1] - line_points[i][1])* (line_points[j][1] - line_points[i][1])))
+                #     d=sorted(d,key=lambda d : d[2])
+                #
+                #
+                # buffer = []
+                # pairbuffer = []
+                # count = 0
+                # draw = 0
+                # while len(d) > 0:
+                #
+                #     temp = []
+                #
+                #     if d[count][0] in buffer and d[count][1] in buffer :
+                #         if buffer.index(d[count][0])-1>=0:
+                #             pv1 = buffer[buffer.index(d[count][0])-1]
+                #         else:
+                #             pv1 = None
+                #         try:
+                #             bv1 = buffer[buffer.index(d[count][0])+1]
+                #         except:
+                #             bv1 = None
+                #         if buffer.index(d[count][1])-1>=0:
+                #             pv2 = buffer[buffer.index(d[count][1])-1]
+                #         else:
+                #             pv2 = None
+                #         try:
+                #             bv2 = buffer[buffer.index(d[count][1])+1]
+                #         except:
+                #             bv2 = None
+                #
+                #
+                #         if (pv1, d[count][0]) in pairbuffer:
+                #             temp.append(pv1)
+                #         if (d[count][0], bv1) in pairbuffer:
+                #             temp.append(bv1)
+                #         if (pv2, d[count][1]) in pairbuffer:
+                #             temp.append(pv2)
+                #         if (d[count][1], bv2) in pairbuffer:
+                #             temp.append(bv2)
+                #
+                #     if d[count][0] in buffer and d[count][1] in buffer or buffer.count(d[count][0]) == 2 or buffer.count(d[count][1]) == 2:
+                #         count = count +1
+                #         if count == len(d):
+                #           break
+                #     else:
+                #         draw = draw + 1
+                #         buffer.append(d[count][0])
+                #         buffer.append(d[count][1])
+                #         pairbuffer.append((d[count][0],d[count][1]))
 
-                    # g = self.canvas.create_line(cx, cy, nx, ny, fill='yellow', width=1.5)
+                for i in range(len(line_points1)-1):
+                    cx, cy = self.__matrixcoor2canvascoor(line_points1[i][0], line_points1[i][1])
+                    nx, ny = self.__matrixcoor2canvascoor(line_points1[i+1][0], line_points1[i+1][1])
+                        # g = self.canvas.create_line(cx, cy, nx, ny, fill='yellow', width=1.5)
                     g = self.canvas.create_line(cx, cy, nx, ny, fill='SeaGreen', width=width)
                     self.tag_graticule.append(g)
-                    if i == len(line_points) - 2:
-                        t = self.canvas.create_text(nx-2, ny-1, anchor='se', font=("Purisa",fontsize), fill='SeaGreen',
-                                                    text=str(int(round(lat_mat[line_points[i+1][0], line_points[i+1][1]]))))
+                    if i == len(line_points1) - 2:
+                        t = self.canvas.create_text(nx-2, ny-1, anchor='se', font=("Purisa",fontsize,'bold'), fill='SeaGreen',
+                                                    text=str(int(round(lat_mat[line_points1[i+1][0], line_points1[i+1][1]]))))
+                        self.tag_graticule.append(t)
+                for i in range(len(line_points2)-1):
+                    cx, cy = self.__matrixcoor2canvascoor(line_points2[i][0], line_points2[i][1])
+                    nx, ny = self.__matrixcoor2canvascoor(line_points2[i+1][0], line_points2[i+1][1])
+                        # g = self.canvas.create_line(cx, cy, nx, ny, fill='yellow', width=1.5)
+                    g = self.canvas.create_line(cx, cy, nx, ny, fill='SeaGreen', width=width)
+                    self.tag_graticule.append(g)
+                    if i == len(line_points2) - 2:
+                        t = self.canvas.create_text(nx-2, ny-1, anchor='se', font=("Purisa",fontsize,'bold'), fill='SeaGreen',
+                                                    text=str(int(round(lat_mat[line_points2[i+1][0], line_points2[i+1][1]]))))
                         self.tag_graticule.append(t)
 
         '''
@@ -1728,7 +1951,7 @@ class MainWindow(object):
         assert 0 <= x < self.imtk.width()
         assert 0 <= y < self.imtk.height()
 
-        beta = 5
+        beta = 20
 
         i = int((y / self.zoom_factor) / beta)  # int division
         j = int((x / self.zoom_factor) / beta)
@@ -1746,7 +1969,7 @@ class MainWindow(object):
         assert 0 <= i < self.prob_mat.shape[0]
         assert 0 <= j < self.prob_mat.shape[1]
 
-        beta = 5
+        beta = 20
 
         x = int(j * beta * self.zoom_factor)
         y = int(i * beta * self.zoom_factor)
@@ -1758,6 +1981,8 @@ class MainWindow(object):
 
     # check each entry's input
     def __check_input(self, string, is_lon):
+        # check_result = -1
+
         value = -1
 
         pattern1 = '^[+-]?\d{1,3} \d{1,2} \d{1,2} ?$'
@@ -1768,20 +1993,26 @@ class MainWindow(object):
             # print values
             if float(values[1]) >= 60.00 or float(values[1]) < 0.00 or float(values[2]) >= 60.00 or float(values[2]) < 0.00:
                 raise IndexError('Out of range')
+                # check_result = 2
             if is_lon:
                 if float(values[0]) > 179.00:
                     if float(values[1]) > 0.00 and float(values[2]) > 0.00:
                         raise IndexError('Out of range')
+                        # check_result = 2
                     if float(values[1]) > 180.00:
                         raise IndexError('Out of range')
+                        # check_result = 2
                 if float(values[0]) < -179.00:
                     if float(values[1]) > 0.00 and float(values[2]) > 0.00:
                         raise IndexError('Out of range')
+                        # check_result = 2
                     if float(values[1]) < -180.00:
                         raise IndexError('Out of range')
+                        # check_result = 2
             else:
                 if float(values[0]) > 89.00:
                     if float(values[1]) > 0.00 and float(values[2]) > 0.00:
+                        # check_result = 2
                         raise IndexError('Out of range')
                     if float(values[1]) > 90.00:
                         raise IndexError('Out of range')
@@ -1810,10 +2041,15 @@ class MainWindow(object):
 
     def __update_files(self):
         # pass
-        user = 'PolarRecieveZip@163.com'
-        password = 'PolarEmail1234'
-        pop3_server = 'pop.163.com'
-        get_email_zip.checkemail(user,password,pop3_server,0)
+        # user = 'PolarRecieveZip@163.com'
+        # password = 'PolarEmail1234'
+        user, password = getemailpsw(3)
+        user = user + '@lamda.nju.edu.cn'
+        pop3_server = '210.28.132.67'
+        index, t = get_email_zip.checkemail(user,password,pop3_server,0)
+        if index == 0:
+            tkMessageBox.showinfo('Info', '暂未有图像更新，请稍候')
+            return
         unzipfile.unzipfile('download/test.zip', 'data/')
         from shutil import move
         for dirpath, dirnames, filenames in os.walk('data/test'):
@@ -1822,20 +2058,23 @@ class MainWindow(object):
                 print filename
         self.__init_models()
         clearfile.clear_raster()
-        # save
-        ee = [self.e1, self.e2, self.e3, self.e4]
-        ss = [e.get() for e in ee]
+        try:
+            # save
+            ee = [self.e1, self.e2, self.e3, self.e4]
+            ss = [e.get() for e in ee]
 
-        # refresh
-        self.__callback_b9_reset()
+            # refresh
+            self.__callback_b9_reset()
 
-        # load
-        for e, s in zip(ee, ss):
-            e.insert(0, s)
-        self.__draw_start_point()
-        self.__draw_end_point()
+            # load
+            for e, s in zip(ee, ss):
+                e.insert(0, s)
+            self.__draw_start_point()
+            self.__draw_end_point()
 
-        sys.stdout.flush()
+            sys.stdout.flush()
+        except:
+            pass
 
     # this function will run as a daemon thread 
     def __refresh_model_regularly(self):        
@@ -1886,45 +2125,6 @@ class MainWindow(object):
                 sys.stdout.flush()
 
             sleep(30)
-
-    def __print_save_img(self):
-        print self.tag_start_point
-        print self.tag_end_point
-        print self.path
-        if self.tag_graticule != []:
-            pass
-        if self.tag_path != []:
-            for i in range(0, len(self.path)-1):
-                cx, cy = self.__matrixcoor2canvascoor(self.path[i][0], self.path[i][1])
-                nx, ny = self.__matrixcoor2canvascoor(self.path[i+1][0], self.path[i+1][1])
-                self.printmodisimg.line([cx, cy, nx, ny], fill='#7FFF00', width=10)
-                self.printcostimg.line([cx, cy, nx, ny], fill='#7FFF00', width=10)
-        if self.tag_operation_point != []:
-            for item in self.current_op_points:
-                lat = float(item[1])
-                lon = float(item[0])
-                i, j = self.__find_geocoordinates(lon, lat)
-                x, y = self.__matrixcoor2canvascoor(i, j)
-                self.printmodisimg.ellipse(x-15, y-15, x+15, y+15, fill='yellow')
-                self.printcostimg.ellipse(x-15, y-15, x+15, y+15, fill='yellow')
-        if self.tag_start_point != None:
-            print 'start'
-            lon = float(self.e1.get())
-            lat = float(self.e2.get())
-            i, j = self.__find_geocoordinates(lon, lat)
-            x, y = self.__matrixcoor2canvascoor(i, j)
-            self.printmodisimg.ellipse([x-15, y-15, x+15, y+15], fill='red')
-            self.printcostimg.ellipse([x-15, y-15, x+15, y+15], fill='red')
-            print x,y
-        if self.tag_end_point != None:
-            print 'end'
-            lon = float(self.e3.get())
-            lat = float(self.e4.get())
-            i, j = self.__find_geocoordinates(lon, lat)
-            x, y = self.__matrixcoor2canvascoor(i, j)
-            self.printmodisimg.ellipse([x-15, y-15, x+15, y+15], fill='blue')
-            self.printcostimg.ellipse([x-15, y-15, x+15, y+15], fill='blue')
-            print x,y
 
 ####################################################################################
 ### end of class MainWindow ########################################################

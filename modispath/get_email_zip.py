@@ -24,6 +24,7 @@ import imaplib
 import re
 import mimetypes
 import os
+import shutil
 from optparse import OptionParser
 
 def LoginMail(hostname, user, password):
@@ -57,11 +58,21 @@ def print_info(msg, indent=0):
             if value:
                 if header=='Subject':
                     value = decode_str(value)
-                    # pr               int('subject', value)
+                    # print('subject', value)
                     if value[0:7] == '[south]':
-                        longitati = value;
+                        l_time = value.split(' ')[2]
+                        if os.path.exists('time.txt'):
+                            time_log = open('time.txt')
+                            if l_time > time_log.readline():
+                                mark = True
+                            time_log.close()
+                        if mark or not os.path.exists('time.txt'):
+                            new_log = open('time.txt', 'w')
+                            new_log.write(l_time)
+                            new_log.close()
+                            mark = True
                         # print('longitati', longitati)
-                        mark = True
+                        # mark = True
                 else:
                     hdr, addr = parseaddr(value)
                     name = decode_str(hdr)
@@ -84,7 +95,7 @@ def print_info(msg, indent=0):
                      filename = 'part-%03d%s' % (counter, ext)
                  counter += 1
                  if os.path.exists('download'):
-                     os.rmtree('download')
+                     shutil.rmtree('download')
                  os.mkdir('download')
                  fp = open(os.path.join('download', filename), 'wb')
                  fp.write(part.get_payload(decode=True))
@@ -96,7 +107,7 @@ def print_info(msg, indent=0):
 # 连接到POP3服务器:
 
 def checkemail(user,password,pop3_server,prenum):
-	server = poplib.POP3(pop3_server)
+	server = poplib.POP3_SSL(pop3_server, '995')
 	# 可以打开或关闭调试信息:
 	# server.set_debuglevel(1)
 	# 可选:打印POP3服务器的欢迎文字:
@@ -114,6 +125,8 @@ def checkemail(user,password,pop3_server,prenum):
 	# 获取最新一封邮件, 注意索引号从1开始:
 	index = len(mails)
 	if index == prenum:
+		# print 'in'
+		# print index
 		return index, None
 
 	unseennum = index - prenum
@@ -136,14 +149,14 @@ def checkemail(user,password,pop3_server,prenum):
 		       # raise('exception:', e)
 		       print('exception:', e)
 		       continue
-
+	for i in range(index):
+		server.dele(i+1)
 	server.quit()
 	return index,None
 
-
-if __name__ == "__main__":
-	user = 'fanying_yt@163.com'
-	password = 'fy1259680'
-	pop3_server = 'pop.163.com'
-	specified_email = '1584743373@qq.com'
-	checkemail(user,password,pop3_server,215)
+if __name__ == '__main__':
+    from mailutil import getemailpsw
+    user, password = getemailpsw(3)
+    user = user + '@lamda.nju.edu.cn'
+    pop3_server = '210.28.132.67'
+    checkemail(user,password,pop3_server,0)

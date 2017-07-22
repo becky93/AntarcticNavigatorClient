@@ -5,9 +5,13 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+import mailutil
+
 def send(receiver, content):
-    sender = 'PolarRequestSAR@163.com'
-    passwd = 'PolarEmail1234'
+    # sender = 'PolarRequestSAR@163.com'
+    # passwd = 'PolarEmail1234'
+    sender, passwd = mailutil.getemailpsw(4)
+    sender = sender + '@lamda.nju.edu.cn'
 
     msg = MIMEMultipart()
     msg['to'] = receiver
@@ -20,11 +24,17 @@ def send(receiver, content):
     msg.attach(txt)
 
     try:
-        smtp = smtplib.SMTP()
-        smtp.connect('smtp.163.com')
+        smtp = smtplib.SMTP_SSL()
+        smtp.connect('210.28.132.67', 465)
+        smtp.ehlo()
         smtp.login(sender, passwd)
         smtp.sendmail(sender, receiver, msg.as_string())
         smtp.quit()
+        # smtp = smtplib.SMTP()
+        # smtp.connect('smtp.163.com')
+        # smtp.login(sender, passwd)
+        # smtp.sendmail(sender, receiver, msg.as_string())
+        # smtp.quit()
         return True
     except smtplib.SMTPException:
         print "Error: 无法发送邮件"
